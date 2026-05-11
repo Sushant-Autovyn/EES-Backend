@@ -1,0 +1,119 @@
+const express = require('express');
+const cors = require('cors');
+const http = require('http');
+
+const path = require('path');
+
+require('dotenv').config({ path: path.join(__dirname, '.env') });
+
+const db = require('./config/db');
+
+const employeeRoutes = require('./routes/employeeRoutes');
+const authRoutes = require('./routes/authRoutes');
+const attendanceRoutes = require('./routes/attendanceRoutes');
+const leaveRoutes = require('./routes/leaveRoutes');
+const payrollRoutes = require('./routes/payrollRoutes');
+const dashboardRoutes = require('./routes/dashboardRoutes');
+const departmentRoutes = require('./routes/departmentRoutes');
+const roleRoutes = require('./routes/roleRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
+const reimbursementRoutes = require('./routes/reimbursementRoutes');
+const recruitmentRoutes = require('./routes/recruitmentRoutes');
+const documentRoutes = require('./routes/documentRoutes');
+const onboardingRoutes = require('./routes/onboardingRoutes');
+const hrReportsRoutes = require('./routes/hrReportsRoutes');
+const userRoutes = require('./routes/userRoutes');
+const settingsRoutes = require('./routes/settingsRoutes');
+const announcementRoutes = require('./routes/announcementRoutes');
+const auditRoutes = require('./routes/auditRoutes');
+const backupRoutes = require('./routes/backupRoutes');
+const branchRoutes = require('./routes/branchRoutes');
+const adminReportsRoutes = require('./routes/adminReportsRoutes');
+
+const app = express();
+
+const server = http.createServer(app);
+
+const io = require('socket.io')(server, {
+  cors: {
+    origin: '*'
+  }
+});
+
+
+// SOCKET CONNECTION
+io.on('connection', (socket) => {
+
+  console.log('User Connected');
+
+  socket.on('disconnect', () => {
+
+    console.log('User Disconnected');
+
+  });
+
+});
+
+
+app.use(cors());
+app.use(express.json());
+
+app.use('/uploads', express.static('uploads'));
+
+app.get('/', (req, res) => {
+  res.send('Employee Backend Running...');
+});
+
+
+// ROUTES
+app.use('/api/employees', employeeRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/attendance', attendanceRoutes);
+app.use('/api/leaves', leaveRoutes);
+app.use('/api/payroll', payrollRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/departments', departmentRoutes);
+app.use('/api/roles', roleRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/reimbursements', reimbursementRoutes);
+app.use('/api/recruitment', recruitmentRoutes);
+app.use('/api/documents', documentRoutes);
+app.use('/api/onboarding', onboardingRoutes);
+app.use('/api/hr-reports', hrReportsRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/settings', settingsRoutes);
+app.use('/api/announcements', announcementRoutes);
+app.use('/api/audit', auditRoutes);
+app.use('/api/backup', backupRoutes);
+app.use('/api/branches', branchRoutes);
+app.use('/api/admin-reports', adminReportsRoutes);
+
+
+const PORT = process.env.PORT || 5000;
+
+server.listen(PORT, () => {
+  console.log(`Employee Backend Server running on port ${PORT}`);
+}).on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.log(`Port ${PORT} is busy. Killing existing process...`);
+    const { execSync } = require('child_process');
+    try {
+      const result = execSync(`netstat -ano | findstr ":${PORT}" | findstr "LISTENING"`).toString();
+      const pid = result.trim().split(/\s+/).pop();
+      if (pid && pid !== '0') {
+        execSync(`taskkill /F /PID ${pid}`);
+        console.log(`Killed process ${pid}. Restarting...`);
+        setTimeout(() => {
+          server.listen(PORT, () => {
+            console.log(`Employee Backend Server running on port ${PORT}`);
+          });
+        }, 1000);
+      }
+    } catch (e) {
+      console.error('Could not free port. Close other terminals and try again.');
+    }
+  }
+});
+
+
+module.exports = io;
