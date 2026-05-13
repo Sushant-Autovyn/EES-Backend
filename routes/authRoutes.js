@@ -37,6 +37,28 @@ router.post('/register', async (req, res) => {
           return res.status(500).json(err);
         }
 
+        // If the registered user is an employee, also create a record
+        // in the employees table so they appear in the Employees section.
+        if ((role || '').toLowerCase() === 'employee') {
+
+          const empSql = `
+            INSERT INTO employees (name, email, status)
+            VALUES (?, ?, 'Active')
+            ON CONFLICT (email) DO NOTHING
+          `;
+
+          db.query(empSql, [name, email], (empErr) => {
+            if (empErr) {
+              console.log('Employee record creation error:', empErr);
+            }
+            res.json({
+              message: 'User Registered Successfully'
+            });
+          });
+
+          return;
+        }
+
         res.json({
           message: 'User Registered Successfully'
         });

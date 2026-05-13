@@ -29,6 +29,7 @@ const auditRoutes = require('./routes/auditRoutes');
 const backupRoutes = require('./routes/backupRoutes');
 const branchRoutes = require('./routes/branchRoutes');
 const adminReportsRoutes = require('./routes/adminReportsRoutes');
+const complaintRoutes = require('./routes/complaintRoutes');
 
 const app = express();
 
@@ -87,7 +88,27 @@ app.use('/api/audit', auditRoutes);
 app.use('/api/backup', backupRoutes);
 app.use('/api/branches', branchRoutes);
 app.use('/api/admin-reports', adminReportsRoutes);
+app.use('/api/complaints', complaintRoutes);
 
+
+// BACKFILL: ensure every user with role 'employee' has a row in employees table
+const backfillSql = `
+  INSERT INTO employees (name, email, status)
+  SELECT u.name, u.email, 'Active'
+  FROM users u
+  WHERE LOWER(u.role) = 'employee'
+    AND u.email IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM employees e WHERE e.email = u.email
+    )
+`;
+db.query(backfillSql, (err, result) => {
+  if (err) {
+    console.log('Employee backfill error:', err.message);
+  } else if (result && result.rowCount) {
+    console.log(`Backfilled ${result.rowCount} employee record(s) from users table`);
+  }
+});
 
 const PORT = process.env.PORT || 5000;
 
