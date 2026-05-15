@@ -60,7 +60,7 @@ router.get(
         safeQuery(payrollQuery),
         safeQuery(rolesQuery),
         safeQuery(usersQuery),
-        safeQuery('SELECT e.name, a.status FROM attendance a JOIN employees e ON a.employee_id = e.id ORDER BY a.id DESC LIMIT 5')
+        safeQuery('SELECT e.name, a.status, a.check_in FROM attendance a JOIN employees e ON a.employee_id = e.id ORDER BY a.id DESC LIMIT 5')
       ]);
 
       res.json({

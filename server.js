@@ -91,6 +91,11 @@ app.use('/api/admin-reports', adminReportsRoutes);
 app.use('/api/complaints', complaintRoutes);
 
 
+// MIGRATION: ensure users table has phone column
+db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(20)`, (err) => {
+  if (err) console.log('users.phone migration error:', err.message);
+});
+
 // BACKFILL: ensure every user with role 'employee' has a row in employees table
 const backfillSql = `
   INSERT INTO employees (name, email, status)
@@ -116,23 +121,11 @@ server.listen(PORT, () => {
   console.log(`Employee Backend Server running on port ${PORT}`);
 }).on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
-    console.log(`Port ${PORT} is busy. Killing existing process...`);
-    const { execSync } = require('child_process');
-    try {
-      const result = execSync(`netstat -ano | findstr ":${PORT}" | findstr "LISTENING"`).toString();
-      const pid = result.trim().split(/\s+/).pop();
-      if (pid && pid !== '0') {
-        execSync(`taskkill /F /PID ${pid}`);
-        console.log(`Killed process ${pid}. Restarting...`);
-        setTimeout(() => {
-          server.listen(PORT, () => {
-            console.log(`Employee Backend Server running on port ${PORT}`);
-          });
-        }, 1000);
-      }
-    } catch (e) {
-      console.error('Could not free port. Close other terminals and try again.');
-    }
+    console.log(`Port ${PORT} is busy. Please close the other process and retry.`);
+    process.exit(1);
+  } else {
+    console.error('Server error:', err);
+    process.exit(1);
   }
 });
 

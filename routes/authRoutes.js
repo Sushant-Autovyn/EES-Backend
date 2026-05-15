@@ -15,6 +15,7 @@ router.post('/register', async (req, res) => {
     const {
       name,
       email,
+      phone,
       password,
       role
     } = req.body;
@@ -24,13 +25,13 @@ router.post('/register', async (req, res) => {
 
     const sql = `
       INSERT INTO users
-      (name, email, password, role)
-      VALUES (?, ?, ?, ?)
+      (name, email, phone, password, role)
+      VALUES (?, ?, ?, ?, ?)
     `;
 
     db.query(
       sql,
-      [name, email, hashedPassword, role],
+      [name, email, phone || null, hashedPassword, role],
       (err, result) => {
 
         if (err) {
@@ -130,34 +131,66 @@ router.post('/login', (req, res) => {
 });
 
 
-// FORGOT PASSWORD - Generate OTP
+// FORGOT PASSWORD - Generate OTP and send via Twilio SMS
+// Keyed by phone number (the user identifier for password reset).
 const otpStore = {};
 
 router.post('/forgot-password', (req, res) => {
 
-  const { email } = req.body;
+  const { phone, channel } = req.body;
+  // channel: 'whatsapp' (default) | 'sms'
+  const useWhatsapp = (channel || 'whatsapp').toLowerCase() === 'whatsapp';
 
-  const sql = 'SELECT * FROM users WHERE email=?';
+  if (!phone) {
+    return res.status(400).json({ message: 'Phone number is required' });
+  }
 
-  db.query(sql, [email], (err, result) => {
+  // Look up user by phone, falling back to the employees table so
+  // accounts created before the users.phone column existed still work.
+  const sql = `
+    SELECT u.*
+    FROM users u
+    LEFT JOIN employees e ON e.email = u.email
+    WHERE u.phone = ? OR e.phone = ?
+    LIMIT 1
+  `;
+
+  db.query(sql, [phone, phone], (err, result) => {
 
     if (err) return res.status(500).json(err);
 
     if (result.length === 0) {
-      return res.status(404).json({ message: 'Email not found' });
+      return res.status(404).json({ message: 'No account found for this phone number' });
     }
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    otpStore[email] = { otp, expires: Date.now() + 10 * 60 * 1000 };
+    const user = result[0];
 
-    const sendEmail = require('../utils/sendEmail');
-    sendEmail(email, 'Password Reset OTP', `Your OTP is: ${otp}. Valid for 10 minutes.`)
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    otpStore[phone] = {
+      otp,
+      email: user.email,
+      expires: Date.now() + 10 * 60 * 1000
+    };
+
+    const { sendSms, sendWhatsapp } = require('../utils/sendSms');
+    const sender = useWhatsapp ? sendWhatsapp : sendSms;
+    const channelLabel = useWhatsapp ? 'WhatsApp' : 'SMS';
+
+    sender(phone, `Your password reset OTP is: ${otp}. Valid for 10 minutes.`)
       .then(() => {
-        res.json({ message: 'OTP sent to your email' });
+        res.json({ message: `OTP sent to your phone via ${channelLabel}` });
       })
-      .catch((emailErr) => {
-        console.log('Email error:', emailErr);
-        res.json({ message: 'OTP generated', otp }); // fallback: return otp if email fails
+      .catch((sendErr) => {
+        console.log(`Twilio ${channelLabel} error:`, sendErr.message);
+        console.log(`[DEV] OTP for ${phone}: ${otp}`);
+        // Fallback: delivery failed (e.g. Twilio not configured or
+        // recipient not opted-in to WhatsApp sandbox).
+        // Return the OTP so the user can still complete the reset in dev.
+        res.json({
+          message: `${channelLabel} service unavailable. Use the OTP shown below.`,
+          otp,
+          devMode: true
+        });
       });
 
   });
@@ -168,12 +201,12 @@ router.post('/forgot-password', (req, res) => {
 // RESET PASSWORD
 router.post('/reset-password', async (req, res) => {
 
-  const { email, otp, newPassword } = req.body;
+  const { phone, otp, newPassword } = req.body;
 
-  const stored = otpStore[email];
+  const stored = otpStore[phone];
 
   if (!stored) {
-    return res.status(400).json({ message: 'No OTP requested for this email' });
+    return res.status(400).json({ message: 'No OTP requested for this phone number' });
   }
 
   if (stored.otp !== otp) {
@@ -181,7 +214,7 @@ router.post('/reset-password', async (req, res) => {
   }
 
   if (Date.now() > stored.expires) {
-    delete otpStore[email];
+    delete otpStore[phone];
     return res.status(400).json({ message: 'OTP expired' });
   }
 
@@ -189,13 +222,73 @@ router.post('/reset-password', async (req, res) => {
 
   const sql = 'UPDATE users SET password=? WHERE email=?';
 
-  db.query(sql, [hashedPassword, email], (err, result) => {
+  db.query(sql, [hashedPassword, stored.email], (err, result) => {
 
     if (err) return res.status(500).json(err);
 
-    delete otpStore[email];
+    delete otpStore[phone];
     res.json({ message: 'Password reset successful' });
 
+  });
+
+});
+
+
+// SEND CUSTOM MESSAGE - admin/hr utility to send any message via WhatsApp or SMS
+// Body: { phone: string | string[], message: string, channel?: 'whatsapp' | 'sms' }
+// Accepts a single phone or an array of phones for bulk sending.
+const verifyToken = require('../middleware/authMiddleware');
+
+router.post('/send-message', verifyToken, async (req, res) => {
+
+  const { phone, message, channel } = req.body;
+  const useWhatsapp = (channel || 'whatsapp').toLowerCase() === 'whatsapp';
+
+  // Normalize phone input into a deduped array of trimmed non-empty strings
+  let phones = [];
+  if (Array.isArray(phone)) {
+    phones = phone;
+  } else if (typeof phone === 'string') {
+    // Allow comma / newline / semicolon separated input
+    phones = phone.split(/[,\n;]+/);
+  }
+  phones = [...new Set(phones.map(p => (p || '').trim()).filter(Boolean))];
+
+  if (phones.length === 0 || !message) {
+    return res.status(400).json({ message: 'At least one phone and a message are required' });
+  }
+
+  // Restrict to admin / hr roles
+  const role = (req.user?.role || '').toLowerCase();
+  if (role !== 'admin' && role !== 'hr') {
+    return res.status(403).json({ message: 'Not authorized to send messages' });
+  }
+
+  const { sendSms, sendWhatsapp } = require('../utils/sendSms');
+  const sender = useWhatsapp ? sendWhatsapp : sendSms;
+  const channelLabel = useWhatsapp ? 'WhatsApp' : 'SMS';
+
+  // Send in parallel and collect per-recipient results
+  const results = await Promise.all(phones.map(async (p) => {
+    try {
+      const r = await sender(p, message);
+      return { phone: p, success: true, sid: r.sid, status: r.status };
+    } catch (err) {
+      console.log(`send-message error to ${p}:`, err.message);
+      return { phone: p, success: false, error: err.message };
+    }
+  }));
+
+  const sent = results.filter(r => r.success).length;
+  const failed = results.length - sent;
+
+  res.json({
+    message: `Sent ${sent}/${results.length} via ${channelLabel}` + (failed ? ` (${failed} failed)` : ''),
+    channel: channelLabel,
+    total: results.length,
+    sent,
+    failed,
+    results
   });
 
 });
