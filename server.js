@@ -92,10 +92,6 @@ app.use('/api/complaints', complaintRoutes);
 
 
 // MIGRATION: ensure users table has phone column
-db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(20)`, (err) => {
-  if (err) console.log('users.phone migration error:', err.message);
-});
-
 // BOOTSTRAP: run database/setup.sql on startup so a fresh DB
 // (e.g. Railway Postgres) gets all tables created automatically.
 // All statements use CREATE TABLE IF NOT EXISTS so this is safe on every boot.
@@ -103,50 +99,55 @@ db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(20)`, (err) =
   try {
     const fs = require('fs');
     const setupPath = path.join(__dirname, 'database', 'setup.sql');
-    if (!fs.existsSync(setupPath)) return;
+    if (fs.existsSync(setupPath)) {
+      const sql = fs.readFileSync(setupPath, 'utf8');
+      const { Pool } = require('pg');
+      const pool = process.env.DATABASE_URL
+        ? new Pool({
+            connectionString: process.env.DATABASE_URL,
+            ssl: { rejectUnauthorized: false }
+          })
+        : new Pool({
+            host: process.env.DB_HOST,
+            port: process.env.DB_PORT || 5432,
+            user: process.env.DB_USER,
+            password: process.env.DB_PASSWORD,
+            database: process.env.DB_NAME
+          });
 
-    const sql = fs.readFileSync(setupPath, 'utf8');
-    const { Pool } = require('pg');
-    const pool = process.env.DATABASE_URL
-      ? new Pool({
-          connectionString: process.env.DATABASE_URL,
-          ssl: { rejectUnauthorized: false }
-        })
-      : new Pool({
-          host: process.env.DB_HOST,
-          port: process.env.DB_PORT || 5432,
-          user: process.env.DB_USER,
-          password: process.env.DB_PASSWORD,
-          database: process.env.DB_NAME
-        });
-
-    // pg supports multiple statements in a single query when separated by ;
-    await pool.query(sql);
-    await pool.end();
-    console.log('Database schema bootstrap complete');
+      // pg supports multiple statements in a single query when separated by ;
+      await pool.query(sql);
+      await pool.end();
+      console.log('Database schema bootstrap complete');
+    }
   } catch (err) {
     console.log('Database schema bootstrap error:', err.message);
   }
-})();
 
-// BACKFILL: ensure every user with role 'employee' has a row in employees table
-const backfillSql = `
-  INSERT INTO employees (name, email, status)
-  SELECT u.name, u.email, 'Active'
-  FROM users u
-  WHERE LOWER(u.role) = 'employee'
-    AND u.email IS NOT NULL
-    AND NOT EXISTS (
-      SELECT 1 FROM employees e WHERE e.email = u.email
-    )
-`;
-db.query(backfillSql, (err, result) => {
-  if (err) {
-    console.log('Employee backfill error:', err.message);
-  } else if (result && result.rowCount) {
-    console.log(`Backfilled ${result.rowCount} employee record(s) from users table`);
-  }
-});
+  // Run migrations AFTER bootstrap so tables exist
+  db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(20)`, (err) => {
+    if (err) console.log('users.phone migration error:', err.message);
+  });
+
+  // BACKFILL: ensure every user with role 'employee' has a row in employees table
+  const backfillSql = `
+    INSERT INTO employees (name, email, status)
+    SELECT u.name, u.email, 'Active'
+    FROM users u
+    WHERE LOWER(u.role) = 'employee'
+      AND u.email IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM employees e WHERE e.email = u.email
+      )
+  `;
+  db.query(backfillSql, (err, result) => {
+    if (err) {
+      console.log('Employee backfill error:', err.message);
+    } else if (result && result.rowCount) {
+      console.log(`Backfilled ${result.rowCount} employee record(s) from users table`);
+    }
+  });
+})();
 
 const PORT = process.env.PORT || 5000;
 
