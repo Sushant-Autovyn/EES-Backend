@@ -96,6 +96,39 @@ db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(20)`, (err) =
   if (err) console.log('users.phone migration error:', err.message);
 });
 
+// BOOTSTRAP: run database/setup.sql on startup so a fresh DB
+// (e.g. Railway Postgres) gets all tables created automatically.
+// All statements use CREATE TABLE IF NOT EXISTS so this is safe on every boot.
+(async () => {
+  try {
+    const fs = require('fs');
+    const setupPath = path.join(__dirname, 'database', 'setup.sql');
+    if (!fs.existsSync(setupPath)) return;
+
+    const sql = fs.readFileSync(setupPath, 'utf8');
+    const { Pool } = require('pg');
+    const pool = process.env.DATABASE_URL
+      ? new Pool({
+          connectionString: process.env.DATABASE_URL,
+          ssl: { rejectUnauthorized: false }
+        })
+      : new Pool({
+          host: process.env.DB_HOST,
+          port: process.env.DB_PORT || 5432,
+          user: process.env.DB_USER,
+          password: process.env.DB_PASSWORD,
+          database: process.env.DB_NAME
+        });
+
+    // pg supports multiple statements in a single query when separated by ;
+    await pool.query(sql);
+    await pool.end();
+    console.log('Database schema bootstrap complete');
+  } catch (err) {
+    console.log('Database schema bootstrap error:', err.message);
+  }
+})();
+
 // BACKFILL: ensure every user with role 'employee' has a row in employees table
 const backfillSql = `
   INSERT INTO employees (name, email, status)
